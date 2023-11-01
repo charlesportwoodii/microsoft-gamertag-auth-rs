@@ -1,12 +1,15 @@
-use std::env;
 use anyhow::Context;
-use warp::Filter;
-use std::sync::mpsc;
+use rand::distributions::Alphanumeric;
+use rand::Rng;
+use reqwest::header::HeaderMap;
+use reqwest::Url;
 use serde::Deserialize;
 use std::borrow::Cow;
-use rand::Rng;
-use rand::distributions::Alphanumeric;
-use reqwest::Url;
+use std::env;
+use std::sync::mpsc;
+use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
+use tracing_subscriber::fmt::SubscriberBuilder;
+use warp::{filters::body::json, Filter};
 
 #[derive(Deserialize)]
 pub struct Query {
@@ -47,10 +50,10 @@ pub struct Item {
 
 impl Item {
     pub const PRODUCT_MINECRAFT: Self = Self {
-        name: Cow::Borrowed("product_minecraft")
+        name: Cow::Borrowed("product_minecraft"),
     };
     pub const GAME_MINECRAFT: Self = Self {
-        name: Cow::Borrowed("game_minecraft")
+        name: Cow::Borrowed("game_minecraft"),
     };
 }
 
@@ -59,7 +62,6 @@ pub struct Store {
     pub items: Vec<Item>,
 
     // pub signature: String, // todo: signature verification
-
     #[serde(rename = "keyId")]
     pub key_id: String,
 }
@@ -67,7 +69,9 @@ pub struct Store {
 impl AuthenticateWithXboxLiveOrXsts {
     pub fn extract_essential_information(self) -> anyhow::Result<(String, String)> {
         let token = self.token;
-        let user_hash = self.display_claims.xui
+        let user_hash = self
+            .display_claims
+            .xui
             .into_iter()
             .next()
             .context("no xui found")?
@@ -109,6 +113,22 @@ fn random_string() -> String {
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
 
+    let level = tracing::Level::ERROR;
+
+    let subscriber: SubscriberBuilder = tracing_subscriber::fmt();
+    let non_blocking: NonBlocking;
+    let _guard: WorkerGuard;
+    (non_blocking, _guard) = tracing_appender::non_blocking(std::io::stdout());
+
+    subscriber
+        .with_writer(non_blocking)
+        .with_max_level(level)
+        .with_level(true)
+        .with_line_number(level == tracing::Level::TRACE)
+        .with_file(level == tracing::Level::TRACE)
+        .compact()
+        .init();
+
     let client_id = env::var("CLIENT_ID").context("CLIENT_ID is needed")?;
     let client_secret = env::var("CLIENT_SECRET").context("CLIENT_SECRET is needed")?;
     let redirect_uri: Url = env::var("REDIRECT_URI")
@@ -117,8 +137,12 @@ async fn main() -> anyhow::Result<()> {
         .context("redirect uri is not a valid url")?;
 
     match redirect_uri.domain() {
-        Some(domain) => anyhow::ensure!(domain == "localhost" || domain == "127.0.0.1", "domain '{}' isn't valid, it must be '127.0.0.1' or 'localhost'", domain),
-        None => anyhow::bail!("the redirect uri must have a domain")
+        Some(domain) => anyhow::ensure!(
+            domain == "localhost" || domain == "127.0.0.1",
+            "domain '{}' isn't valid, it must be '127.0.0.1' or 'localhost'",
+            domain
+        ),
+        None => anyhow::bail!("the redirect uri must have a domain"),
     }
 
     let port = env::var("PORT")
@@ -126,24 +150,33 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|port| match port.parse::<u16>() {
             Ok(port) => Some(port),
             Err(_) => {
-                eprintln!("'{}' is not a valid port, using the given redirect uri's port", port);
+                eprintln!(
+                    "'{}' is not a valid port, using the given redirect uri's port",
+                    port
+                );
                 None
             }
         })
         .unwrap_or_else(|| match redirect_uri.port() {
             Some(port) => port,
             None => {
-                eprintln!("The redirect uri '{}' doesn't have a port given, assuming port is 80", redirect_uri);
+                eprintln!(
+                    "The redirect uri '{}' doesn't have a port given, assuming port is 80",
+                    redirect_uri
+                );
                 80
             }
         });
     let state = random_string();
-    let url = format!("https://login.live.com/oauth20_authorize.srf\
+    let url = format!(
+        "https://login.live.com/oauth20_authorize.srf\
 ?client_id={}\
 &response_type=code\
 &redirect_uri={}\
 &scope=XboxLive.signin%20offline_access\
-&state={}", client_id, redirect_uri, state);
+&state={}",
+        client_id, redirect_uri, state
+    );
 
     if let Err(error) = webbrowser::open(&url) {
         println!("error opening browser: {}", error);
@@ -153,9 +186,17 @@ async fn main() -> anyhow::Result<()> {
     println!("Now awaiting code.");
     let query = receive_query(port).await;
 
-    anyhow::ensure!(query.state == state, "state mismatch: got state '{}' from query, but expected state was '{}'", query.state, state);
+    anyhow::ensure!(
+        query.state == state,
+        "state mismatch: got state '{}' from query, but expected state was '{}'",
+        query.state,
+        state
+    );
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connection_verbose(true)
+        .build()
+        .unwrap();
 
     println!("Now getting the access token.");
     let access_token: AccessToken = client
@@ -165,7 +206,7 @@ async fn main() -> anyhow::Result<()> {
             ("client_secret", client_secret),
             ("code", query.code),
             ("grant_type", "authorization_code".to_string()),
-            ("redirect_uri", redirect_uri.to_string())
+            ("redirect_uri", redirect_uri.to_string()),
         ])
         .send()
         .await?
@@ -196,62 +237,69 @@ async fn main() -> anyhow::Result<()> {
             "SandboxId": "RETAIL",
             "UserTokens": [token]
         },
-        "RelyingParty": "rp://api.minecraftservices.com/",
+        "RelyingParty": "http://xboxlive.com",
         "TokenType": "JWT"
     });
+
+    let mut headers = HeaderMap::new();
+
+    headers.insert("Accept", "application/json".parse().unwrap());
+
+    headers.insert("Content-Type", "application/json".parse().unwrap());
+    headers.insert("x-xbl-contract-version", "1".parse().unwrap());
+
     let auth_with_xsts: AuthenticateWithXboxLiveOrXsts = client
         .post("https://xsts.auth.xboxlive.com/xsts/authorize")
         .json(&json)
+        .headers(headers.clone())
         .send()
         .await?
         .json()
         .await?;
     let (token, _) = auth_with_xsts.extract_essential_information()?;
-    println!("Now authenticating with Minecraft.");
-    let access_token: AccessToken = client
-        .post("https://api.minecraftservices.com/authentication/login_with_xbox")
+
+    headers = HeaderMap::new();
+    headers.insert(
+        "Authorization",
+        format!("XBL3.0 x={};{}", user_hash, token).parse().unwrap(),
+    );
+    headers.insert("Accept", "application/json".parse().unwrap());
+    headers.insert("Accept-Language", "en-US".parse().unwrap());
+    headers.insert("x-xbl-contract-version", "3".parse().unwrap());
+    headers.insert("Host", "userpresence.xboxlive.com".parse().unwrap());
+
+    let presence = client
+        .get("https://userpresence.xboxlive.com/users/me")
+        .headers(headers)
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+
+    let xuid = presence["xuid"].as_str().unwrap();
+
+    headers = HeaderMap::new();
+    headers.insert(
+        "Authorization",
+        format!("XBL3.0 x={};{}", user_hash, token).parse().unwrap(),
+    );
+    headers.insert("x-xbl-contract-version", "3".parse().unwrap());
+    let profile = client
+        .post("https://profile.xboxlive.com/users/batch/profile/settings")
         .json(&serde_json::json!({
-            "identityToken": format!("XBL3.0 x={};{}", user_hash, token)
+            "userIds": vec![&xuid],
+            "settings": vec![
+                "GameDisplayPicRaw",
+                "Gamertag"
+            ]
         }))
+        .headers(headers.clone())
         .send()
         .await?
-        .json()
-        .await?;
-    let access_token = access_token.access_token;
-
-    println!("Checking for game ownership.");
-    // i don't know how to do signature verification, so we just have to assume the signatures are
-    // valid :)
-    let store: Store = client
-        .get("https://api.minecraftservices.com/entitlements/mcstore")
-        .bearer_auth(&access_token)
-        .send()
-        .await?
-        .json()
+        .json::<serde_json::Value>()
         .await?;
 
-    anyhow::ensure!(
-        store.items.contains(&Item::PRODUCT_MINECRAFT),
-        "product_minecraft item doesn't exist. do you really own the game?"
-    );
-
-    anyhow::ensure!(
-        store.items.contains(&Item::GAME_MINECRAFT),
-        "game_minecraft item doesn't exist. do you really own the game?"
-    );
-
-    println!("Getting game profile.");
-
-    let profile: Profile = client
-        .get("https://api.minecraftservices.com/minecraft/profile")
-        .bearer_auth(&access_token)
-        .send()
-        .await?
-        .json()
-        .await?;
-
-    println!("Congratulations, you authenticated to minecraft from Rust!");
-    println!("access_token={} username={} uuid={}", access_token, profile.name, profile.id);
-
+    dbg!("{:?}", profile);
     Ok(())
 }
