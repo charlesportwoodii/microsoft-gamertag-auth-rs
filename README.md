@@ -1,6 +1,5 @@
-# Authenticating to Minecraft with the Microsoft Authentication Scheme from Rust
-This program showcases an implementation of the microsoft authentication scheme for Minecraft,
-written in Rust.
+# Retrieving a user's Gamertag and Gamerpicture via Microsoft Authentication Scheme, from Rust
+This program shocases an implementation of the microsoft authentication scheme to retrieve a user's gamertag and gamerpicture, written in rust, forked from https://github.com/ALinuxPerson/mcsoft-auth.
 
 # Requirements
 You need to obtain a client id and client secret by creating an [Azure application]. Steps on obtaining the client id and
@@ -68,52 +67,50 @@ Successfully received query
 Going back to your terminal, you should get the following messages in this order:
 
 ```
+Now awaiting code.
 Now getting the access token.
 Now authenticating with Xbox Live.
 Now getting an Xbox Live Security Token (XSTS).
-Now authenticating with Minecraft.
-Checking for game ownership.
+[src/main.rs:303] "{:?}" = "{:?}"
+[src/main.rs:303] profile = Object({
+    "profileUsers": Array([
+        Object({
+            "hostId": String(
+                "2533274793167506",
+            ),
+            "id": String(
+                "2533274793167506",
+            ),
+            "isSponsoredUser": Bool(
+                false,
+            ),
+            "settings": Array([
+                Object({
+                    "id": String(
+                        "GameDisplayPicRaw",
+                    ),
+                    "value": String(
+                        "https://images-eds-ssl.xboxlive.com/image?url=wHwbXKif8cus8csoZ03RW_ES.ojiJijNBGRVUbTnZKvlHqqbdJfZWiFtiClZ7rrQsM9DsCrtWWwxMBJ9uQo7tkO8a_KRf.aUONrFjTWFPdJEcCVvF5jmMgzsUwjeX._KK1QPNuzsBioGPPRYTpZ3YVEMenhXnTkmjXzxiLAZCdGydQuPuZYa7Rr6r6alZWxO&format=png",
+                    ),
+                }),
+                Object({
+                    "id": String(
+                        "Gamertag",
+                    ),
+                    "value": String(
+                        "Alaydriem",
+                    ),
+                }),
+            ]),
+        }),
+    ]),
+})
 ```
 
-Up to this point, this should be the messages that you'll if you have _at least_ a microsoft account. However, it 
-doesn't assume that you have a valid copy of Minecraft.
-
-These are the following possibilities that could happen:
-  * If you own minecraft, it succeeds and continues.
-  * If you __don't__ have minecraft, one of these messages will show:
-    
-    ```
-    Error: product_minecraft item doesn't exist. do you really own the game?
-    ```
-    
-    or
-
-    ```
-    Error: game_minecraft item doesn't exist. do you really own the game?
-    ```
-    
-    Typically, it should be the first error.
-
-Now, if the game ownership check succeeds, the next lines from your terminal should be as follows:
-
-```
-Getting game profile.
-Congratulations, you authenticated to minecraft from Rust!
-access_token=REDACTED username=REDACTED uuid=REDACTED
-```
-
-Of course, replacing `REDACTED` with the real, respective values.
-
-# What this can't do
-
-This program can't:
-  * Support skins.
-  * Handle errors. If an error occurs while during one of the steps, you'll instead get an esoteric error message, 
-    probably from serde complaining that it can't be parsed correctly.
 
 # Technical Information
 
-The technical information on how this program works internally can be seen in the (unofficial) 
+The technical information on how this program works internally can be seen in the (unofficial)
 [Microsoft Authentication Scheme] documentation, and also by looking at the source code of this program.
 
 [Azure application]: https://docs.microsoft.com/en-us/azure/active-directory/develop/quickstart-register-app
